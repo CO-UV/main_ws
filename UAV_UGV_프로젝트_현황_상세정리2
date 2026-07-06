@@ -1,0 +1,1400 @@
+# UAV–UGV 협력 재난 대응 프로젝트 현황 정리
+
+> 작성 목적: 지금까지 논의된 프로젝트의 목표, 시스템 구조, 플랫폼별 역할, 데이터 흐름, 소프트웨어 구성, 현재 확정 사항, 미확정 사항, 예상 위험요소 및 향후 개발 순서를 하나의 문서로 통합 정리한다.  
+> 본 문서는 현재까지 대화에서 확정되거나 구체적으로 논의된 내용을 기준으로 작성했으며, 아직 최종 결정되지 않은 부분은 별도로 표시한다.
+
+---
+
+## 1. 프로젝트 개요
+
+본 프로젝트는 재난 현장, 붕괴 지역, 험지, GPS 신호가 불안정한 환경 등에서 **UAV와 UGV가 협력하여 조난자를 탐색하고 구조 물자를 전달하는 통합 무인이동체 시스템**을 구현하는 것을 목표로 한다.
+
+프로젝트의 핵심 흐름은 다음과 같다.
+
+1. UAV가 상공에서 재난 지역을 탐색한다.
+2. UAV에 탑재된 카메라 영상이 Wi-Fi 기반 ROS 2 통신을 통해 메인 PC로 전송된다.
+3. 메인 PC가 수신한 영상으로 Visual SLAM을 수행한다.
+4. 메인 PC가 영상에서 ArUco 마커 앵커를 인식하여 조난자 위치를 식별한다.
+5. 메인 PC가 조난자 위치를 UGV의 목표 지점으로 생성한다.
+6. UGV가 LiDAR 및 자체 주행 센서를 이용해 목표 지점까지 이동한다.
+7. UGV가 조난자 인근에 도달하여 구조 물자를 전달한다.
+8. 메인 PC가 전체 임무 상태, 통신 상태, 위치 정보, 로그 및 성능지표를 통합 관리한다.
+
+이 프로젝트는 개별 알고리즘 하나를 구현하는 것이 아니라 다음 전체 흐름을 하나의 시스템으로 연결하는 데 의미가 있다.
+
+```text
+상공 탐색
+→ 영상 수집
+→ Visual SLAM
+→ ArUco 마커 앵커 인식
+→ 조난자 위치 결정
+→ UGV 목표 생성
+→ 지상 자율주행
+→ 물자 전달
+→ 임무 완료 및 성능 평가
+```
+
+---
+
+## 2. 프로젝트의 핵심 문제의식
+
+재난 현장에서는 다음 작업이 동시에 필요하다.
+
+- 넓은 지역을 빠르게 탐색
+- 조난자 위치 식별
+- 장애물 및 접근 가능 경로 파악
+- 구조 물자 운송
+- 사람이 직접 진입하기 어려운 구역의 초기 대응
+- 통신이 불안정한 환경에서의 안전한 무인 운용
+
+단일 플랫폼만으로는 이러한 요구를 모두 충족하기 어렵다.
+
+### UAV의 강점
+
+- 상공에서 넓은 지역을 빠르게 관측 가능
+- 지형과 장애물의 전역적 구조 파악에 유리
+- 지상 로봇이 접근하기 전 선행 탐색 가능
+- 카메라 기반 조난자 탐색 가능
+
+### UAV의 한계
+
+- 비행시간이 제한됨
+- 적재 능력이 제한됨
+- 실제 물자 운송 능력이 부족함
+- Wi-Fi 통신 품질에 따라 영상 전송 성능이 저하될 수 있음
+- 탑재 가능한 연산 장치의 무게와 소비전력이 제한됨
+
+### UGV의 강점
+
+- 상대적으로 높은 적재 능력
+- 긴 운용시간
+- 실제 물자 운반 및 전달 가능
+- LiDAR 기반 근거리 장애물 인식 가능
+- 지상에서 정밀한 목표 접근 가능
+
+### UGV의 한계
+
+- 시야가 제한적임
+- 넓은 지역 탐색 속도가 느림
+- 복잡한 장애물로 인해 경로가 막힐 수 있음
+- 상공 시점에서만 확인 가능한 전역 정보를 얻기 어려움
+
+따라서 본 프로젝트는 다음 역할 분담을 적용한다.
+
+> **UAV는 탐색과 영상 수집을 담당하고, 메인 PC는 인지·판단·계획을 담당하며, UGV는 실제 지상 접근과 물자 전달을 담당한다.**
+
+---
+
+## 3. 현재 확정된 전체 시스템 구조
+
+현재 시스템은 **메인 PC 중심의 중앙집중형 구조**로 설계한다.
+
+기존에는 UAV에 Jetson 계열 엣지 디바이스를 탑재하여 Visual SLAM, 마커 인식 등의 연산을 수행하는 구조를 고려했으나, 하드웨어 구매 문제로 인해 다음과 같이 변경되었다.
+
+- UAV에는 Raspberry Pi 4 4GB 모델을 탑재한다.
+- Raspberry Pi에는 카메라를 연결한다.
+- Raspberry Pi는 영상 수집 및 압축 전송만 담당한다.
+- 고수준 영상 처리와 인지 연산은 모두 메인 PC에서 수행한다.
+- 메인 PC가 전체 시스템의 연산 허브 및 임무 관리 서버 역할을 한다.
+- UGV는 센서 데이터를 제공하고 메인 PC에서 계산한 목표 또는 경로 명령을 실행한다.
+- UAV 비행 제어와 UGV 모터 제어 같은 실시간 저수준 제어는 각 플랫폼 내부에서 수행한다.
+
+### 시스템 개요도
+
+```mermaid
+flowchart LR
+    CAM[UAV Camera] --> RPI[Raspberry Pi 4 4GB]
+    RPI -->|ROS 2 CompressedImage / Wi-Fi| MAIN[Main PC]
+
+    FC[UAV Flight Controller] --> RPI
+    MAIN -->|고수준 임무 명령| RPI
+    RPI --> FC
+
+    UGV_SENSOR[UGV LiDAR / IMU / Odom] --> UGV_PC[UGV Onboard Computer]
+    UGV_PC -->|ROS 2 Sensor Data / Wi-Fi| MAIN
+    MAIN -->|Goal / Path / Command| UGV_PC
+    UGV_PC --> MCU[UGV MCU / Motor Controller]
+    MCU --> MOTOR[Motor / Steering / Actuator]
+
+    MAIN --> VSLAM[Visual SLAM]
+    MAIN --> ARUCO[ArUco Marker Detection]
+    MAIN --> MISSION[Mission Manager]
+    MAIN --> PLANNER[UGV Path Planning]
+    MAIN --> LOG[Logging / UI / Evaluation]
+```
+
+---
+
+## 4. 중앙집중형 구조 채택 이유
+
+### 4.1 하드웨어 제약
+
+초기에는 UAV에 Jetson을 탑재하여 영상 처리와 인식을 엣지에서 수행하는 구조를 고려했으나, 실제 장비 확보가 어려워 Raspberry Pi 4 4GB를 이용하는 방향으로 변경하였다.
+
+Raspberry Pi 4는 다음 작업에는 충분히 적합하다.
+
+- 카메라 영상 입력
+- 영상 압축
+- ROS 2 토픽 발행
+- Wi-Fi 통신
+- 상태 메시지 발행
+- 비행제어기와의 기본 데이터 연동
+- SSH 및 Tailscale을 통한 원격 관리
+
+반면 다음 연산을 UAV에서 직접 수행하기에는 성능과 발열, 안정성 측면에서 부담이 크다.
+
+- 고해상도 실시간 Visual SLAM
+- ArUco 마커의 반복 검출 및 위치 추정
+- 다중 영상 처리 파이프라인
+- 조난자 목표 위치 생성
+- 전체 임무 상태 판단
+- UGV 경로 계획
+
+따라서 이러한 연산을 메인 PC로 집중한다.
+
+### 4.2 개발 및 디버깅 편의성
+
+모든 고수준 알고리즘이 메인 PC에서 실행되면 다음 장점이 있다.
+
+- Visual SLAM 및 ArUco 알고리즘 변경이 쉬움
+- 영상, SLAM 결과, UGV 센서 데이터를 한 장치에서 확인 가능
+- RViz, rqt, 로그 분석 도구 사용이 편리함
+- 각 노드의 실행 상태를 중앙에서 관리 가능
+- 데이터 저장 및 실험 재현이 쉬움
+- 웹 UI 또는 모니터링 화면을 메인 PC에 통합하기 쉬움
+
+### 4.3 구조적 한계
+
+중앙집중형 구조는 다음 한계를 가진다.
+
+- Wi-Fi가 끊기면 UAV 영상 처리도 중단됨
+- 메인 PC가 단일 장애점이 됨
+- 영상 압축 및 전송 지연이 Visual SLAM 성능에 영향을 줄 수 있음
+- 실제 재난 현장 적용 시 통신 거리와 장애물 문제에 민감함
+- 완전한 분산 자율 시스템보다는 연구용 프로토타입에 가까움
+
+따라서 본 구조는 다음과 같이 정의한다.
+
+> 본 시스템은 **메인 PC 기반 중앙집중형 연산 구조**이며, UAV와 UGV의 저수준 안전 제어는 각 플랫폼 내부에 유지하는 하이브리드 구조이다.
+
+---
+
+## 5. 플랫폼별 역할 정의
+
+# 5.1 UAV 역할
+
+현재 UAV는 **상공 영상 센서 플랫폼과 비행 플랫폼**으로 정의한다.
+
+UAV는 고수준 영상 인지 연산을 수행하지 않고, 양질의 영상과 비행 상태 데이터를 메인 PC로 안정적으로 전달하는 데 집중한다.
+
+### UAV 구성
+
+- UAV 기체
+- 비행제어기(PX4 계열 고려)
+- Raspberry Pi 4 4GB
+- 카메라
+- Wi-Fi 통신 장치
+- 전원 공급 모듈
+- 필요 시 IMU, 고도, 비행 상태 데이터 연동
+
+### UAV 비행제어기의 역할
+
+비행제어기는 다음 실시간 기능을 내부에서 수행해야 한다.
+
+- 자세 안정화
+- 모터 출력 제어
+- 고도 유지
+- 이륙 및 착륙
+- 비상 착륙
+- 통신 단절 시 안전 동작
+- Return-to-Home 또는 지정 안전 동작
+- 조종기 명령 처리
+- 비행 상태 생성
+
+이 기능들은 Wi-Fi와 메인 PC에 의존하면 안 된다.
+
+### UAV의 Raspberry Pi 4 역할
+
+Raspberry Pi 4는 다음 역할을 담당한다.
+
+1. 카메라 영상 수집
+2. 영상 프레임에 타임스탬프 부여
+3. 영상 압축
+4. ROS 2 `CompressedImage` 토픽 발행
+5. 카메라 캘리브레이션 정보 관리 및 전송
+6. UAV 상태 및 heartbeat 발행
+7. 비행제어기 데이터의 메인 PC 전달
+8. 네트워크 연결 상태 감시
+9. 필요 시 메인 PC의 고수준 임무 명령을 비행제어기로 전달
+10. 노드 자동 재시작 및 로그 저장
+
+### UAV가 수행하지 않는 기능
+
+현재 구조에서 Raspberry Pi는 다음 연산을 수행하지 않는다.
+
+- Visual SLAM
+- ArUco 마커 최종 인식
+- 조난자 위치 생성
+- UGV 경로 계획
+- 전체 임무 상태 판단
+- 복잡한 AI 모델 추론
+- RViz 시각화
+- 대규모 지도 처리
+
+---
+
+# 5.2 메인 PC 역할
+
+메인 PC는 시스템의 **중앙 연산 허브, 임무 관리자, 네트워크 허브, 기록 서버, 시각화 장치** 역할을 수행한다.
+
+### 핵심 역할
+
+#### 1. UAV 영상 수신
+
+- Raspberry Pi가 발행한 압축 영상 수신
+- JPEG 또는 사용 중인 압축 포맷 복원
+- 카메라 왜곡 보정
+- 해상도 및 색상 형식 변환
+- Visual SLAM과 ArUco 노드에 영상 입력 제공
+
+#### 2. Visual SLAM 수행
+
+- 영상 특징점 추출
+- 프레임 간 특징점 대응
+- 카메라 이동 추정
+- UAV 카메라 궤적 생성
+- 주변 공간 구조 생성
+- 추적 손실 감지
+- 재초기화 또는 복구
+- 필요 시 루프 폐쇄 수행
+
+#### 3. ArUco 마커 앵커 기반 조난자 인식
+
+- 영상 내 ArUco 마커 검출
+- 마커 ID 확인
+- 마커 중심점 및 모서리 좌표 계산
+- 카메라 기준 상대 위치 추정
+- 반복 검출 여부 확인
+- 조난자 후보를 유효 목표로 확정
+- 검출 결과와 시간정보 저장
+
+#### 4. 조난자 목표 생성
+
+- Visual SLAM 결과와 ArUco 검출 결과 결합
+- 구조 대상의 목표 위치 계산
+- 목표 유효성 판단
+- 목표 신뢰도 또는 오차 범위 기록
+- UGV가 사용할 목표 메시지 생성
+
+#### 5. UGV 센서 처리
+
+- LiDAR 데이터 수신
+- UGV Odometry 수신
+- UGV IMU 수신
+- 주행 상태 및 배터리 정보 수신
+- UGV 위치와 장애물 상태 분석
+
+#### 6. UGV 경로 계획 및 명령 생성
+
+- 조난자 위치를 UGV 목표로 설정
+- UGV 현재 위치와 지도 기반 전역 경로 생성
+- LiDAR 기반 지역 장애물 회피
+- 경로 재계획
+- 목표 도달 여부 판단
+- UGV로 목표, 경로 또는 주행 명령 전송
+
+#### 7. 임무 상태 관리
+
+메인 PC는 전체 임무를 상태기계 형태로 관리한다.
+
+```text
+IDLE
+→ UAV_READY
+→ UAV_TAKEOFF
+→ UAV_SEARCH
+→ IMAGE_RECEIVING
+→ VSLAM_TRACKING
+→ MARKER_DETECTED
+→ TARGET_CONFIRMED
+→ UGV_GOAL_SENT
+→ UGV_MOVING
+→ UGV_ARRIVED
+→ SUPPLY_DELIVERY
+→ MISSION_COMPLETE
+```
+
+오류 상태도 별도로 관리한다.
+
+```text
+IMAGE_TIMEOUT
+VSLAM_LOST
+MARKER_UNCERTAIN
+NETWORK_DISCONNECTED
+UGV_PATH_FAILED
+UGV_BLOCKED
+GOAL_TIMEOUT
+DELIVERY_FAILED
+```
+
+#### 8. 로그 및 평가
+
+- 원본 또는 압축 영상 저장
+- Visual SLAM 궤적 저장
+- 마커 검출 결과 저장
+- UGV 센서 로그 저장
+- 통신 지연 기록
+- 목표 전달 시각 기록
+- 임무 완료 시각 기록
+- 전체 임무 성공률 계산
+- 실패 원인 분석
+
+#### 9. 사용자 인터페이스
+
+향후 웹 UI를 구현할 경우 메인 PC가 웹 서버 역할을 수행하는 것이 적절하다.
+
+가능한 UI 구성은 다음과 같다.
+
+- UAV 카메라 영상
+- Visual SLAM 지도
+- UAV 상태
+- UGV 지도 및 현재 위치
+- 조난자 마커 위치
+- UGV 목표와 계획 경로
+- 배터리 상태
+- 통신 상태
+- 임무 단계
+- 비상 정지 버튼
+- 수동/자동 운용 모드 선택
+
+---
+
+# 5.3 UGV 역할
+
+UGV는 **지상 센서 플랫폼, 이동 실행 플랫폼, 구조 물자 운반 플랫폼**이다.
+
+메인 PC가 고수준 연산을 담당하더라도, UGV 내부에는 실시간 제어 및 최소 안전 기능이 반드시 남아 있어야 한다.
+
+### UGV 핵심 역할
+
+1. LiDAR 데이터 수집
+2. IMU 데이터 수집
+3. Odometry 생성
+4. 배터리 및 차량 상태 생성
+5. 메인 PC에 센서 데이터 전송
+6. 메인 PC에서 목표 또는 경로 수신
+7. 로컬 경로 추종
+8. 모터 및 조향 제어
+9. 장애물 근접 시 비상 정지
+10. 조난자 위치까지 물자 운반
+11. 도착 후 물자 전달 동작 수행
+12. 임무 상태를 메인 PC에 보고
+
+### UGV 저수준 제어
+
+UGV 내부 MCU 또는 제어기는 다음 기능을 로컬에서 처리해야 한다.
+
+- 모터 속도 제어
+- 조향각 제어
+- 엔코더 피드백 처리
+- PID 제어
+- 브레이크 및 비상 정지
+- 명령 타임아웃 감시
+- 통신 단절 시 정지
+- 비정상 명령 제한
+- 수동 비상정지 입력 처리
+
+메인 PC가 모터 PWM을 직접 네트워크로 전송하는 구조는 피해야 한다.
+
+### UGV 로컬 안전 기능
+
+- 일정 거리 이내 장애물 감지 시 즉시 정지
+- 일정 시간 동안 새 명령이 없으면 정지
+- 메인 PC heartbeat가 끊기면 정지
+- 속도 또는 조향 명령이 허용 범위를 넘으면 거부
+- 센서 오류 발생 시 안전 모드 진입
+
+### 물자 전달 방식
+
+초기 실험에서는 복잡한 로봇팔보다 단순하고 검증 가능한 방식이 적합하다.
+
+가능한 방식은 다음과 같다.
+
+- 목표 지점 정지 후 적재함 개방
+- 서보모터 기반 잠금 해제
+- 경사형 적재함을 이용한 물자 하역
+- 조난자 근처에서 전달 완료 신호 송신
+
+---
+
+## 6. 권장 ROS 2 노드 구성
+
+### 6.1 UAV 측 노드
+
+```text
+/uav/camera_node
+/uav/compressed_image_publisher
+/uav/camera_info_publisher
+/uav/flight_bridge
+/uav/status_publisher
+/uav/heartbeat_node
+/uav/network_monitor
+```
+
+### 6.2 메인 PC 측 노드
+
+```text
+/main/image_decompressor
+/main/vslam_node
+/main/aruco_detector
+/main/target_estimator
+/main/mission_manager
+/main/ugv_global_planner
+/main/ugv_local_planner
+/main/command_manager
+/main/data_logger
+/main/system_monitor
+/main/web_server
+```
+
+### 6.3 UGV 측 노드
+
+```text
+/ugv/lidar_driver
+/ugv/imu_driver
+/ugv/odometry_node
+/ugv/state_publisher
+/ugv/path_follower
+/ugv/safety_monitor
+/ugv/mcu_bridge
+/ugv/delivery_controller
+/ugv/heartbeat_node
+```
+
+---
+
+## 7. 권장 ROS 2 토픽 구성
+
+### 7.1 UAV → 메인 PC
+
+```text
+/uav/camera/image_raw/compressed
+/uav/camera/camera_info
+/uav/imu/data
+/uav/odometry
+/uav/battery_state
+/uav/flight_status
+/uav/heartbeat
+/uav/network_status
+```
+
+### 7.2 메인 PC 내부 생성 토픽
+
+```text
+/main/uav/image_raw
+/main/vslam/pose
+/main/vslam/path
+/main/vslam/map
+/main/aruco/detections
+/main/rescue_target
+/main/mission_state
+/main/system_status
+```
+
+### 7.3 UGV → 메인 PC
+
+```text
+/ugv/scan
+/ugv/points
+/ugv/odom
+/ugv/imu/data
+/ugv/wheel_states
+/ugv/battery_state
+/ugv/vehicle_status
+/ugv/heartbeat
+/ugv/delivery_status
+```
+
+### 7.4 메인 PC → UGV
+
+```text
+/ugv/goal_pose
+/ugv/global_path
+/ugv/cmd_vel
+/ugv/ackermann_cmd
+/ugv/emergency_stop
+/ugv/delivery_command
+/ugv/mission_command
+```
+
+실제 UGV 구동 방식이 Differential Drive인지 Ackermann인지에 따라 명령 형식은 달라진다.
+
+---
+
+## 8. UAV 영상 전송 구조
+
+현재 확정된 UAV 영상 흐름은 다음과 같다.
+
+```mermaid
+flowchart LR
+    C[Camera] --> R[Raspberry Pi 4]
+    R --> CAP[Image Capture]
+    CAP --> TS[Timestamp]
+    TS --> ENC[JPEG Compression]
+    ENC --> PUB[ROS 2 CompressedImage Publisher]
+    PUB --> WIFI[Wi-Fi]
+    WIFI --> MAIN[Main PC]
+    MAIN --> DEC[Image Decompression]
+    DEC --> SLAM[Visual SLAM]
+    DEC --> DET[ArUco Detection]
+```
+
+### 압축 영상을 사용하는 이유
+
+- 무선 대역폭 절감
+- Raspberry Pi에서 구현이 비교적 단순함
+- 메인 PC에서 복원 후 여러 알고리즘에 재사용 가능
+- 고해상도 raw image보다 네트워크 부담이 적음
+
+### 예상 문제
+
+- JPEG 압축 손실로 특징점 품질 저하
+- 마커 모서리 검출 정확도 저하
+- 프레임 지연
+- Wi-Fi 지터
+- 높은 CPU 사용률
+- 프레임 드롭
+
+### 실험으로 결정해야 할 설정
+
+- 영상 해상도
+- 프레임률
+- JPEG 품질
+- 노출시간
+- 카메라 초점
+- UAV 비행 고도
+- 비행 속도
+- 카메라 장착 각도
+- 마커 크기
+
+---
+
+## 9. CameraInfo와 시간 동기화의 중요성
+
+`CompressedImage`만 전송하면 영상 확인은 가능하지만, Visual SLAM과 ArUco 위치 추정을 안정적으로 수행하려면 추가 정보가 필요하다.
+
+### CameraInfo
+
+다음 카메라 보정값이 필요하다.
+
+- 초점거리
+- 주점
+- 왜곡계수
+- 이미지 크기
+- 카메라 모델
+
+이를 위해 다음 토픽 발행이 권장된다.
+
+```text
+/uav/camera/camera_info
+```
+
+### 타임스탬프
+
+영상이 촬영된 시각과 UAV 자세 정보가 일치해야 한다.
+
+예를 들어 다음 데이터는 시간적으로 연결되어야 한다.
+
+- 카메라 프레임 촬영 시각
+- UAV IMU 시각
+- UAV 자세 시각
+- Visual SLAM 추정 시각
+- ArUco 검출 시각
+- 목표 생성 시각
+- UGV 목표 수신 시각
+
+시간 불일치가 발생하면 조난자 위치 추정 오차가 커질 수 있다.
+
+---
+
+## 10. Visual SLAM 역할
+
+본 프로젝트에서 Visual SLAM은 UAV의 위치 추정 및 상공 공간 인지를 담당한다.
+
+### 처리 흐름
+
+```text
+압축 영상 수신
+→ 영상 복원
+→ 왜곡 보정
+→ 특징점 추출
+→ 프레임 간 특징점 대응
+→ 카메라 이동 추정
+→ 지도 갱신
+→ 카메라 궤적 생성
+```
+
+### Visual SLAM의 목적
+
+- UAV 카메라의 상대 위치 추정
+- 상공 탐색 경로 기록
+- 조난자 마커 위치를 공간 정보와 연결
+- GPS 의존도 감소
+- 탐색 영역 파악
+- 이후 UGV 목표 생성에 필요한 기준 정보 제공
+
+### 주의사항
+
+Visual SLAM은 UAV 비행제어기를 대체하지 않는다.
+
+- 비행 안정화: UAV 비행제어기
+- 공간 인지 및 연구용 위치 추정: 메인 PC의 Visual SLAM
+
+---
+
+## 11. ArUco 마커 앵커 기반 조난자 인식
+
+본 프로젝트는 일반 사람 탐지 모델 대신 또는 그 이전 단계에서 **ArUco 마커 앵커**를 조난자 식별 수단으로 사용한다.
+
+### 사용 이유
+
+- 구조 대상의 명확한 식별
+- 고유 ID 부여 가능
+- 검출 알고리즘 구현이 비교적 단순함
+- 실험 재현성이 높음
+- 조난자 위치를 UGV 목표와 직접 연결하기 쉬움
+- 일반 객체 검출보다 초기 시연 구현이 안정적임
+
+### 처리 흐름
+
+```text
+UAV 영상
+→ ArUco 후보 검출
+→ 마커 ID 확인
+→ 모서리 좌표 추출
+→ 중심 좌표 계산
+→ 카메라 기준 상대 위치 추정
+→ 반복 검출 확인
+→ 구조 대상 확정
+```
+
+### 마커 검출 안정화 방법
+
+- 한 프레임 검출만으로 목표 확정하지 않음
+- 일정 프레임 이상 연속 검출 조건 사용
+- 마커 픽셀 크기 최소 기준 적용
+- 이미지 경계 근처 검출 제외
+- 자세 추정 오차가 큰 경우 폐기
+- 목표 위치의 프레임 간 분산 확인
+- 마커 ID별 임무 정보 구분
+
+---
+
+## 12. 조난자 목표 생성
+
+메인 PC는 ArUco 검출과 Visual SLAM 결과를 결합하여 UGV 목표를 생성한다.
+
+### 목표 정보 예시
+
+```yaml
+target_id: 23
+detected: true
+timestamp: 2026-06-30T12:00:00
+position:
+  x: 12.4
+  y: 5.7
+  z: 0.0
+confidence: 0.91
+source: "aruco_marker"
+valid: true
+```
+
+### 목표 생성 시 확인할 사항
+
+- 마커가 실제 조난자 마커인지
+- 여러 프레임에서 반복 검출되었는지
+- 위치 변화가 허용 범위 이내인지
+- 목표가 UGV가 접근 가능한 영역인지
+- 기존 목표보다 최신 정보인지
+- 목표 위치가 유효 지도 범위 안에 있는지
+
+### 프로젝트에서의 의미
+
+좌표변환 자체가 연구의 최종 목적은 아니다.
+
+핵심은 다음이다.
+
+> UAV 영상에서 찾은 조난자 정보를 UGV가 실제로 이동할 수 있는 구조 목표로 연결한다.
+
+---
+
+## 13. UGV 자율주행 구조
+
+UGV는 메인 PC에서 전달받은 구조 목표까지 이동한다.
+
+### 기본 흐름
+
+```text
+목표 위치 수신
+→ UGV 현재 위치 확인
+→ 전역 경로 생성
+→ LiDAR 기반 장애물 인식
+→ 지역 경로 생성
+→ 경로 추종
+→ 필요 시 재계획
+→ 목표 도달
+→ 정지
+→ 물자 전달
+```
+
+### 전역 경로
+
+현재 위치에서 조난자 목표 위치까지 전체 이동 경로를 생성한다.
+
+### 지역 경로
+
+실시간 LiDAR 정보를 이용해 가까운 장애물을 회피한다.
+
+### 접근 불가능한 목표 처리
+
+다음 상황을 고려해야 한다.
+
+- 조난자 위치가 벽 뒤에 있음
+- UGV가 통과할 수 없는 좁은 공간
+- 급경사
+- 잔해로 경로 차단
+- 목표 지점 주변에 진입 불가능 영역 존재
+
+이 경우 목표 근처의 안전한 대체 전달 지점을 계산하는 기능을 향후 고려할 수 있다.
+
+---
+
+## 14. 통신 구조
+
+현재는 메인 PC를 중심으로 UAV와 UGV가 연결되는 스타형 네트워크가 적합하다.
+
+```mermaid
+flowchart TD
+    AP[전용 Wi-Fi AP 또는 메인 PC AP]
+    UAV[UAV Raspberry Pi]
+    MAIN[Main PC]
+    UGV[UGV Computer]
+
+    AP --- UAV
+    AP --- MAIN
+    AP --- UGV
+```
+
+### 권장 네트워크 구성
+
+- UAV, 메인 PC, UGV를 동일 로컬 네트워크에 연결
+- 고정 IP 또는 DHCP 예약
+- 동일한 ROS_DOMAIN_ID
+- 장치별 네임스페이스 구분
+- 방화벽 및 DDS discovery 확인
+- 필요 시 Fast DDS Discovery Server 사용
+
+### 네임스페이스 예시
+
+```text
+/uav/...
+/main/...
+/ugv/...
+/mission/...
+```
+
+### 메인 PC의 허브 역할
+
+ROS 2에는 ROS 1의 `roscore`와 같은 중앙 Master가 없다.
+
+따라서 메인 PC는 다음 의미에서 허브 역할을 한다.
+
+- 연산 허브
+- 데이터 수집 허브
+- 임무 판단 허브
+- 기록 및 시각화 허브
+- 필요 시 DDS Discovery Server
+- 웹 UI 서버
+- 원격 접속 관문
+
+---
+
+## 15. Tailscale 사용 계획
+
+Tailscale은 프로젝트의 실시간 현장 영상 전송보다 **원격 관리용 VPN**으로 사용하는 것이 적절하다.
+
+### 사용 목적
+
+- 외부에서 Raspberry Pi에 SSH 접속
+- 로그 확인
+- 카메라 노드 재시작
+- 설정 변경
+- 파일 전송
+- 장치 재부팅
+- 네트워크 상태 점검
+- 현장 장비 원격 유지보수
+
+### 권장 구조
+
+```text
+현장 ROS 2 실시간 통신:
+UAV ↔ 현장 Wi-Fi ↔ Main PC ↔ 현장 Wi-Fi ↔ UGV
+
+외부 원격 관리:
+Developer Laptop ↔ Tailscale ↔ Raspberry Pi / Main PC / UGV
+```
+
+실시간 영상과 LiDAR를 Tailscale을 통해 인터넷으로 항상 전송하는 구조는 지연과 대역폭 문제로 인해 초기 시스템에서는 권장하지 않는다.
+
+---
+
+## 16. Raspberry Pi 운영체제 결정
+
+### 현재 권장 운영체제
+
+```text
+Ubuntu Server 22.04 LTS ARM64
+```
+
+### 선택 이유
+
+- Raspberry Pi 4 4GB에서 충분히 가벼움
+- GUI 관련 메모리와 CPU 사용 제거
+- 모니터 없이 헤드리스 운용 가능
+- SSH 및 Tailscale 관리 가능
+- ROS 2 Humble과의 호환성이 좋음
+- systemd 자동 실행 구성이 쉬움
+- UAV 탑재 장치에 불필요한 GUI 제거
+- 영상 압축과 ROS 2 전송에 자원 집중 가능
+
+### Desktop을 선택하지 않은 이유
+
+Raspberry Pi 4 4GB에서 Ubuntu Desktop 실행은 가능하지만, 현재 UAV의 역할에는 GUI가 필요하지 않다.
+
+- RViz는 메인 PC에서 실행
+- 카메라 영상 확인도 메인 PC에서 수행
+- Visual SLAM도 메인 PC에서 수행
+- ArUco 검출도 메인 PC에서 수행
+- 원격 관리는 SSH와 Tailscale 사용
+- 현장 모니터 연결이 필수 아님
+
+따라서 4GB RAM 때문만이 아니라 장치 역할상 Server가 더 적절하다.
+
+### 권장 소프트웨어 구성
+
+```text
+Ubuntu Server 22.04 LTS ARM64
+ROS 2 Humble ros-base
+OpenSSH Server
+Tailscale
+카메라 드라이버
+image_transport
+compressed_image_transport
+systemd 서비스
+네트워크 모니터링 도구
+heartbeat 노드
+```
+
+---
+
+## 17. 카메라 선택 관련 주의사항
+
+운영체제보다 카메라 종류가 실제 구현 난이도에 더 큰 영향을 줄 수 있다.
+
+### USB 카메라
+
+장점:
+
+- Ubuntu 22.04에서 비교적 구성 단순
+- `/dev/video0` 기반 V4L2 사용 가능
+- ROS 2 카메라 노드 선택이 쉬움
+- 드라이버 문제 가능성이 상대적으로 낮음
+
+### CSI 카메라
+
+주의사항:
+
+- Ubuntu 22.04에서 카메라 드라이버 및 libcamera 호환성을 반드시 사전 확인해야 함
+- Raspberry Pi OS와 Ubuntu의 지원 방식이 다를 수 있음
+- 카메라 노드 설치와 파이프라인 구성이 USB보다 복잡할 수 있음
+
+### 현재 권장
+
+카메라가 아직 확정되지 않았다면 초기 개발은 USB UVC 카메라가 구현 위험이 낮다.
+
+---
+
+## 18. Wi-Fi 대역폭과 데이터량 문제
+
+UAV 압축 영상과 UGV LiDAR 데이터를 동시에 메인 PC로 전송할 경우 네트워크 병목이 발생할 수 있다.
+
+### 특히 문제가 될 수 있는 데이터
+
+- 1280×720 고프레임 영상
+- 높은 JPEG 품질
+- 3D LiDAR PointCloud2
+- 고주기 IMU
+- RViz 시각화용 다수 토픽
+- rosbag 동시 기록
+
+### 점검 항목
+
+```bash
+ros2 topic hz /uav/camera/image_raw/compressed
+ros2 topic bw /uav/camera/image_raw/compressed
+
+ros2 topic hz /ugv/scan
+ros2 topic bw /ugv/scan
+
+ros2 topic hz /ugv/points
+ros2 topic bw /ugv/points
+```
+
+### 대응 방법
+
+- 영상 해상도 조정
+- 영상 프레임률 감소
+- JPEG 품질 조정
+- 3D LiDAR voxel downsampling
+- PointCloud 전송 주기 감소
+- 관심 영역만 사용
+- 제어 메시지와 영상 데이터의 QoS 분리
+- 전용 Wi-Fi AP 사용
+- 5GHz 대역 사용 가능 여부 검토
+- 메시지 우선순위 설계
+
+---
+
+## 19. ROS 2 QoS 설계 방향
+
+데이터 성격에 따라 QoS를 다르게 적용해야 한다.
+
+### 영상 및 LiDAR
+
+- 일부 프레임 손실 허용 가능
+- 최신 데이터가 중요
+- 지연이 낮아야 함
+- `BEST_EFFORT` 검토
+- 작은 queue depth 권장
+
+### 목표 및 임무 명령
+
+- 손실이 발생하면 안 됨
+- `RELIABLE` 권장
+- 명령 ID와 타임스탬프 포함
+- 중복 명령 처리 규칙 필요
+
+### Heartbeat
+
+- 일정 주기 발행
+- 일정 시간 미수신 시 연결 단절 판단
+- 안전 정지와 연동
+
+### 상태 정보
+
+- 최신 상태가 중요
+- 과거 상태가 누적되지 않도록 depth 제한
+
+---
+
+## 20. 통신 장애 안전 전략
+
+### UAV 측
+
+- 메인 PC 연결이 끊겨도 비행제어기는 계속 자세 안정화
+- 일정 시간 영상 전송 실패 시 재연결 시도
+- 임계시간 초과 시 호버링, 복귀 또는 착륙
+- 미전송 중요 로그 저장
+- 재연결 후 상태 동기화
+
+### UGV 측
+
+- 메인 PC 명령이 일정 시간 이상 없으면 정지
+- 목표가 있더라도 로컬 안전센서가 위험을 감지하면 정지
+- heartbeat 미수신 시 fail-safe
+- 통신 복구 후 최신 목표와 임무 상태 재수신
+- 비상정지 명령은 최우선 처리
+
+### 메인 PC 측
+
+- UAV 영상 timeout 감지
+- UGV heartbeat timeout 감지
+- 임무 상태 비정상 전이 감지
+- 중복 목표 방지
+- 오래된 센서 데이터 폐기
+- 재연결 시 현재 상태 재동기화
+
+---
+
+## 21. 연산 자원 배분
+
+### UAV Raspberry Pi
+
+- 카메라 입력
+- 압축
+- ROS 2 전송
+- 상태 및 heartbeat
+- 비행제어기 브리지
+- 네트워크 관리
+
+### 메인 PC
+
+- 영상 복원
+- Visual SLAM
+- ArUco 검출
+- 조난자 목표 추정
+- UGV 센서 처리
+- 경로 계획
+- 임무 상태 관리
+- UI 및 로그
+- 성능 평가
+
+### UGV 탑재 컴퓨터
+
+- 센서 드라이버
+- 센서 데이터 송신
+- 경로 추종
+- 로컬 안전 감시
+- MCU 통신
+- 물자 전달 장치 제어
+
+### UGV MCU
+
+- 모터 PID
+- 조향 제어
+- 엔코더 처리
+- watchdog
+- 비상 정지
+- 실시간 저수준 제어
+
+---
+
+## 22. 현재까지 확정된 사항
+
+| 항목 | 현재 결정 |
+|---|---|
+| 연구 시나리오 | UAV 탐색 후 UGV가 조난자에게 구조 물자를 전달 |
+| 조난자 인식 | ArUco 마커 앵커 기반 |
+| UAV 인지 방식 | 카메라 영상 기반, Visual SLAM은 메인 PC에서 수행 |
+| UAV 탑재 컴퓨터 | Raspberry Pi 4 4GB |
+| UAV 연산 범위 | 영상 수집·압축·전송 중심 |
+| 영상 통신 | Wi-Fi 기반 ROS 2 `CompressedImage` |
+| 중앙 연산 | 메인 PC에서 수행 |
+| 메인 PC 역할 | 중앙 연산 허브, 임무 관리자, 기록 및 UI |
+| UGV 역할 | 센서 데이터 제공, 지상 접근, 물자 운반 |
+| 저수준 제어 | UAV 비행제어기와 UGV MCU 내부에서 수행 |
+| Raspberry Pi OS | Ubuntu Server 22.04 LTS ARM64 권장 |
+| ROS 2 | Humble 사용 방향 |
+| 원격 관리 | SSH, 필요 시 Tailscale |
+| 현장 네트워크 | 메인 PC 중심의 스타형 Wi-Fi 구조 권장 |
+
+---
+
+## 23. 아직 확정되지 않은 사항
+
+| 항목 | 결정 필요 내용 |
+|---|---|
+| UAV 카메라 | USB UVC 카메라 또는 CSI 카메라 |
+| 영상 해상도 | 640×480, 1280×720 등 실험 후 결정 |
+| 영상 FPS | 15fps, 30fps 등 |
+| JPEG 품질 | 네트워크와 인식률 비교 후 결정 |
+| Visual SLAM | ORB-SLAM 계열, RTAB-Map, VINS 계열 등 최종 선정 필요 |
+| UAV 비행제어기 | PX4 기반 여부 및 구체 모델 |
+| UAV 텔레메트리 | IMU·고도·Odometry 전송 범위 |
+| UGV 탑재 컴퓨터 | 최종 하드웨어 구성 재확인 필요 |
+| UGV 센서 | 2D LiDAR 또는 3D LiDAR, IMU, 엔코더 구성 |
+| UGV 구동 방식 | Differential Drive 또는 Ackermann |
+| UGV 명령 형식 | Goal, Path, cmd_vel, AckermannDrive 중 결정 |
+| 물자 전달 장치 | 적재함 개방, 서보 하역 등 |
+| ROS 2 DDS | Cyclone DDS 또는 Fast DDS |
+| Discovery 구조 | 멀티캐스트 또는 Discovery Server |
+| Wi-Fi 장비 | 전용 공유기, AP, 외장 안테나 여부 |
+| Tailscale 범위 | 단순 SSH 관리 또는 원격 ROS 통신까지 사용할지 |
+| 목표 위치 표현 | map frame, odom frame 등 최종 설계 필요 |
+| 실험 환경 | 실내, 야외, 재난 모사 환경 |
+| 평가 기준 | 정확도, 지연, 성공률의 세부 임계값 |
+
+---
+
+## 24. 현재 기술적 위험요소
+
+### 24.1 Wi-Fi 불안정
+
+- UAV 이동으로 신호 품질 변동
+- 건물과 장애물에 의한 감쇠
+- 영상 프레임 드롭
+- 지연 증가
+- DDS discovery 불안정
+
+### 24.2 Raspberry Pi 전원 및 발열
+
+- 카메라와 Wi-Fi 동시 사용 시 전력 부족 가능
+- USB 장치 추가 시 전원 안정성 문제
+- 고온에서 CPU throttling 가능
+- UAV 진동에 의한 연결 불량 가능
+
+### 24.3 압축 영상 기반 Visual SLAM
+
+- JPEG 아티팩트
+- 특징점 손실
+- 프레임 간 지연 편차
+- 카메라 노출 변화
+- UAV 진동 및 motion blur
+
+### 24.4 ArUco 검출
+
+- 높은 고도에서 마커가 작게 보임
+- 마커 기울기
+- 그림자 및 반사
+- 부분 가림
+- 카메라 초점 불량
+- 압축 손실
+- 조명 변화
+
+### 24.5 UGV 접근 실패
+
+- 목표가 UGV 접근 불가능 영역
+- 지도와 실제 환경 차이
+- LiDAR 사각지대
+- 경사, 잔해, 좁은 통로
+- 네트워크 지연으로 인한 경로 갱신 실패
+
+### 24.6 중앙집중형 구조
+
+- 메인 PC 장애 시 전체 임무 중단
+- 메인 PC CPU·GPU 과부하
+- 여러 센서 데이터를 동시에 처리할 때 병목
+- rosbag 기록으로 인한 저장장치 부하
+
+---
+
+## 25. 권장 개발 순서
+
+### 1단계: Raspberry Pi 단독 카메라 송신
+
+- Ubuntu Server 22.04 설치
+- SSH 설정
+- Wi-Fi 설정
+- 카메라 인식 확인
+- ROS 2 Humble ros-base 설치
+- 카메라 노드 실행
+- `CompressedImage` 발행
+- 메인 PC에서 영상 수신
+- 프레임률 및 대역폭 측정
+
+### 2단계: 영상 전송 안정화
+
+- CameraInfo 발행
+- 타임스탬프 확인
+- 영상 해상도별 테스트
+- JPEG 품질별 테스트
+- Wi-Fi 거리별 테스트
+- systemd 자동 실행
+- heartbeat 추가
+
+### 3단계: 메인 PC Visual SLAM
+
+- 압축 영상 복원
+- Visual SLAM 입력 연결
+- 정지 상태 테스트
+- 저속 이동 영상 테스트
+- UAV 진동 모사 테스트
+- 추적 손실 및 복구 확인
+
+### 4단계: ArUco 인식
+
+- 마커 ID 검출
+- 검출 거리 측정
+- 고도별 검출률 측정
+- 자세 변화 테스트
+- 반복 검출 필터 적용
+- 목표 정보 생성
+
+### 5단계: UGV 센서 통신
+
+- LiDAR 토픽 수신
+- Odometry 수신
+- IMU 수신
+- UGV heartbeat
+- Wi-Fi 대역폭 측정
+- 영상과 LiDAR 동시 전송 테스트
+
+### 6단계: UGV 목표 주행
+
+- 메인 PC에서 목표 전송
+- UGV 경로 계획
+- 로컬 안전 정지
+- 장애물 회피
+- 목표 도달 판정
+
+### 7단계: 전체 통합
+
+- UAV 탐색
+- 마커 검출
+- 목표 확정
+- UGV 목표 전송
+- UGV 이동
+- 물자 전달
+- 임무 완료
+
+### 8단계: 야외 및 장애환경 테스트
+
+- 거리 증가
+- 장애물 존재
+- 영상 손실
+- 통신 지연
+- 패킷 손실
+- 재연결
+- 비상정지
+- 실패 복구
+
+---
+
+## 26. 권장 성능 평가 항목
+
+### UAV 영상 통신
+
+- 평균 FPS
+- 최소 FPS
+- 평균 대역폭
+- 최대 대역폭
+- 평균 지연시간
+- 지연시간 표준편차
+- 프레임 드롭률
+- 재연결 시간
+
+### Visual SLAM
+
+- 추적 성공률
+- 추적 손실 횟수
+- 재초기화 성공률
+- 처리 FPS
+- 궤적 오차
+- CPU 및 GPU 사용률
+
+### ArUco 검출
+
+- 검출 성공률
+- 오검출률
+- 거리별 검출률
+- 고도별 검출률
+- 시야각별 검출률
+- 위치 추정 오차
+- 검출 지연시간
+
+### UGV 주행
+
+- 목표 도달 성공률
+- 목표 위치 오차
+- 평균 주행시간
+- 충돌 발생 횟수
+- 장애물 회피 성공률
+- 경로 재계획 횟수
+- 통신 단절 시 정지 성공률
+
+### 전체 임무
+
+- 조난자 탐색 성공률
+- 목표 전달 성공률
+- 물자 전달 성공률
+- 전체 임무 성공률
+- 탐색 시작부터 전달 완료까지의 시간
+- 단계별 실패 비율
+- 반복 실험 간 결과 편차
+
+---
+
+## 27. 연구제안서 기준 프로젝트 정의
+
+### 연구 최종목표
+
+본 연구의 최종목표는 UAV의 상공 영상 탐색과 Visual SLAM, ArUco 마커 앵커 기반 조난자 인식, UGV의 LiDAR 기반 지상 자율주행 및 물자 전달 기능을 하나의 ROS 2 기반 협력 시스템으로 통합하는 것이다.
+
+### 연구의 핵심내용
+
+- UAV 카메라 영상의 Wi-Fi 기반 ROS 2 압축 전송
+- 메인 PC의 Visual SLAM 처리
+- ArUco 마커 기반 조난자 인식
+- 조난자 목표 정보 생성
+- UGV 센서 데이터 통합
+- 지상 경로 생성 및 장애물 회피
+- 목표 접근 및 구조 물자 전달
+- 통신 지연과 장애에 대한 안전 설계
+- 전체 임무 성능 평가
+
+### 차별성
+
+- UAV와 UGV를 단순히 병렬 운용하지 않음
+- UAV의 탐색 결과가 UGV의 실제 행동으로 이어짐
+- 조난자 발견에서 물자 전달까지 전체 파이프라인 구현
+- 중앙집중형 연산 구조를 통해 연구 초기 통합성과 재현성을 확보
+- 향후 Jetson 기반 엣지 연산 구조로 확장 가능
+
+---
+
+## 28. 향후 확장 가능성
+
+현재는 메인 PC 중심의 중앙집중형 구조이지만 향후 다음 형태로 확장할 수 있다.
+
+### 엣지 연산 분산
+
+- UAV에 Jetson 탑재
+- Visual SLAM 또는 ArUco 검출을 UAV 내부에서 수행
+- 메인 PC에는 목표 결과만 전송
+- 통신 부하 감소
+- 네트워크 단절 상황에서도 제한적 자율 탐색 가능
+
+### 다중 UAV·UGV
+
+- 여러 UAV가 서로 다른 구역 탐색
+- 여러 UGV가 복수 조난자에게 물자 전달
+- 임무 할당 알고리즘 적용
+- 충돌 방지 및 우선순위 관리
+
+### 마커 없는 조난자 탐지
+
+- 사람 객체 탐지 모델
+- 열화상 카메라
+- 음성 또는 신호 기반 구조 요청
+- 마커와 AI 검출을 결합한 다중 인식
+
+### 통신 확장
+
+- Wi-Fi Mesh
+- 5G/LTE
+- LoRa 보조 통신
+- 멀티링크
+- 자동 중계 노드
+- Tailscale 기반 원격 관제
+
+### 지도 및 제어 확장
+
+- UAV와 UGV 지도 통합
+- 위험도 기반 경로 계획
+- 동적 장애물 대응
+- 구조대원 웹 관제 시스템
+- 자동 물자 분류 및 전달
+
+---
+
+## 29. 현재 프로젝트를 한 문장으로 정리
+
+> **Raspberry Pi 4와 카메라를 탑재한 UAV가 상공 영상을 Wi-Fi 기반 ROS 2 `CompressedImage` 토픽으로 메인 PC에 전송하고, 메인 PC가 Visual SLAM과 ArUco 마커 앵커 인식을 통해 조난자 목표를 생성한 뒤, UGV가 LiDAR 기반 자율주행으로 해당 위치까지 구조 물자를 운반하는 중앙집중형 UAV–UGV 협력 재난 대응 시스템이다.**
+
+---
+
+## 30. 현재 단계의 핵심 우선순위
+
+현재 가장 먼저 검증해야 하는 항목은 다음과 같다.
+
+1. Raspberry Pi 4에 Ubuntu Server 22.04 설치
+2. Raspberry Pi 카메라 정상 인식
+3. ROS 2 Humble 기반 압축 영상 송신
+4. 메인 PC에서 영상 안정적 수신
+5. 영상 FPS, 대역폭, 지연 측정
+6. CameraInfo와 타임스탬프 처리
+7. Wi-Fi 거리별 성능 확인
+8. systemd 자동 실행 및 SSH/Tailscale 관리
+9. 이후 Visual SLAM 연결
+10. ArUco 마커 검출 및 UGV 목표 생성
+
+현 단계에서는 전체 알고리즘을 동시에 구현하기보다 **영상 송신 파이프라인을 먼저 안정화하는 것**이 가장 중요하다.

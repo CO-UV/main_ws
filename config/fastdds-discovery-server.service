@@ -1,0 +1,13 @@
+[Unit]
+Description=Fast DDS Discovery Server (id 0, UDP 11811)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/main_ws/scripts/start_discovery_server.sh
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

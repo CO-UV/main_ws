@@ -1,0 +1,25 @@
+# === main_ws ROS2 / Discovery Server / Super Client / SHM 설정 ===
+# 설치 방법: 이 블록을 ~/.bashrc 맨 아래에 붙여넣기 (또는 `cat config/bashrc.ros2.snippet >> ~/.bashrc`)
+# 자세한 배경은 저장소의 TROUBLESHOOTING.md 참고.
+
+source /opt/ros/humble/setup.bash
+export ROS_DOMAIN_ID=23   # UAV와 반드시 동일한 값 (MAIN_PC_SETUP.md 참고)
+
+# Fast DDS Discovery Server: 이 메인 PC에서 systemd --user
+# (fastdds-discovery-server.service)로 상시 구동.
+# 핫스팟 환경이라 IP가 고정이 아니므로, 터미널을 열 때마다 현재 LAN IP를 자동 감지한다.
+# UAV 쪽 ROS_DISCOVERY_SERVER도 여기서 감지된 IP:11811로 맞춰줘야 함 (echo $ROS_DISCOVERY_SERVER로 확인).
+_MAIN_PC_IP=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+export ROS_DISCOVERY_SERVER="${_MAIN_PC_IP:-127.0.0.1}:11811"
+unset _MAIN_PC_IP
+# 이 메인 PC의 ROS2 노드/도구(ros2 topic list, rqt 등)가 그래프 전체를 보도록 SUPER_CLIENT로 승격.
+export ROS_SUPER_CLIENT=TRUE
+
+# Discovery Server(Client/SUPER_CLIENT) 모드에서는 기본적으로 로컬(같은 머신) 토픽도
+# SHM이 아니라 UDP로만 오간다. 게다가 Fast DDS의 기본 SHM 세그먼트 크기(512KB)가
+# raw 카메라 이미지(수백 KB~1MB)보다 작아서, SHM을 켜기만 해서는 안 되고
+# segment_size를 늘린 프로파일이 필요하다 (scripts/fastdds_shm_profile.xml, 8MB로 설정).
+# 자세한 진단 과정은 TROUBLESHOOTING.md 3번 항목 참고.
+export FASTRTPS_DEFAULT_PROFILES_FILE="$HOME/main_ws/scripts/fastdds_shm_profile.xml"
+
+echo -e "\033[1;36mROS_DISCOVERY_SERVER:\033[0m \033[1;33m${ROS_DISCOVERY_SERVER}\033[0m  \033[2m(ROS_DOMAIN_ID=${ROS_DOMAIN_ID}, SUPER_CLIENT=${ROS_SUPER_CLIENT}, SHM=on)\033[0m"
