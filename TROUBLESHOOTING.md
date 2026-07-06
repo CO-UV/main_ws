@@ -1,13 +1,13 @@
 # main_ws 트러블슈팅 기록
 
 이 문서는 `main_ws` 구성 중 겪은 문제들과 해결 과정을 정리한 기록이다.
-설정 자체의 절차는 [MAIN_PC_SETUP.md](MAIN_PC_SETUP.md) / [README.md](README.md)를
-참고하고, 이 문서는 "왜 그렇게 했는지" / "무엇이 문제였는지"에 집중한다.
+설정 자체의 절차는 [MAIN_PC_SETUP.md](MAIN_PC_SETUP.md)를 참고하고,
+이 문서는 "왜 그렇게 했는지" / "무엇이 문제였는지"에 집중한다.
 
 ## 1. Fast DDS Discovery Server + Super Client 구성
 
 ### 왜 필요했나
-기본(멀티캐스트) discovery는 이 환경에서 동작하지 않았다
+기본(멀티캐스트) discovery는 이 VM 환경에서 동작하지 않았다
 (같은 도메인이어도 서로를 못 찾음). 그래서 Discovery Server를 메인 PC에
 직접 띄우고, 메인 PC의 도구들(`ros2 topic list`, `rqt` 등)이 그래프
 전체를 볼 수 있도록 SUPER_CLIENT로 설정했다.
@@ -17,7 +17,7 @@
   (`fastdds discovery -i 0 -l 0.0.0.0 -p 11811`)
 - 상시 구동: `~/.config/systemd/user/fastdds-discovery-server.service`
   (`systemctl --user enable --now fastdds-discovery-server.service`)
-- `~/.bashrc`에 환경변수 (`config/bashrc.ros2.snippet` 참고):
+- `~/.bashrc`에 환경변수:
   ```bash
   export ROS_DOMAIN_ID=23
   export ROS_DISCOVERY_SERVER=<메인 PC IP>:11811
@@ -146,17 +146,136 @@ Fast DDS의 SHM(공유메모리) 전송이 로컬 토픽에 안 쓰이고 있는
 - `/dev/shm`을 직접 들여다보면 (`ls -la /dev/shm`) 세그먼트 크기를
   바로 확인할 수 있어서 진단에 유용했다.
 
-## 4. Depth raw 토픽이 1.1Hz밖에 안 나오던 문제 (해결)
+## 4. Depth raw 토픽이 1.1Hz밖에 안 나오는 문제 (해결)
 
-컬러와 달리 뎁스는 SHM 세그먼트 문제를 고치고도 여전히 1.1Hz였음.
+### 증상
+컬러와 달리 뎁스는 SHM 세그먼트 문제를 고치고도 여전히 1.1Hz.
 확인해보니 **UAV에서 오는 압축 뎁스 토픽 자체가 이미 1.1Hz**로 들어옴
-(`/uav/camera/depth/image_rect_raw/compressed`). 즉 main_ws 쪽 문제가
-아니라 UAV의 뎁스 캡처/압축 노드(`v4l2_depth_node` 추정) 쪽 원인이었음.
+(`/uav/camera/depth/image_rect_raw/compressed`). main_ws 쪽 문제가 아니라
+UAV 쪽(`v4l2_depth_node`) 원인으로 확인됨.
 
-UAV 쪽 수정 후 `ros2 topic hz /main/uav/camera/depth/image_rect_raw`
-기준 **~10Hz**로 안정화된 것 확인.
+### 잘못 짚었던 가설
+라즈베리파이 CPU 자체가 부족해서 `depth_fps`를 낮게 잡을 수밖에 없다고
+판단하고 있었음 → **틀림**. `htop`으로 보면 4코어 중 여유가 있었고, 근본
+원인은 CPU 총량 부족이 아니라 코드 안의 낭비였음.
 
-<!-- TODO: UAV 쪽에서 구체적으로 무엇을 바꿨는지 채워 넣기 -->
+### 실제 원인
+`v4l2_depth_node.py`가 `publish_raw=false`(기본 설정)임에도 **매 프레임
+쓰지도 않는 raw `sensor_msgs/Image` 메시지를 만들고 있었음**. 그중
+`image.data = frame`(614KB `bytes`를 메시지 필드에 대입) 한 줄이 이
+Pi에서 **프레임당 ~555ms**나 걸림 — rclpy가 생성한 `uint8[]` 필드
+setter가 이 정도 크기에서 비정상적으로 느린 것으로 보임. 실제 처리
+비용(raw 프레임 읽기 ~6ms, PNG 인코딩 ~55ms, publish ~45ms)은 이 낭비에
+비하면 미미했음.
+
+단계별(`_read_exact_frame` → 메시지 구성 → encode → publish)로 타이밍
+로그를 직접 찍어서 어디서 시간이 새는지 실측으로 확인 — 추측이 아니라
+측정으로 찾아냄.
+
+### 해결
+`publish_raw`가 켜져 있을 때만 raw `Image` 메시지를 만들도록 수정.
+header는 `std_msgs/Header`로 한 번만 만들어서 raw/compressed/camera_info가
+공유하도록 정리 (`src/uav_camera_streamer/uav_camera_streamer/v4l2_depth_node.py`,
+`uav_ws` 저장소).
+
+### 검증
+- `depth_fps:=5.0` 그대로: 1.1~1.4Hz → **4.97~5.13Hz**로 정상화
+- `depth_fps:=15.0`으로 한계치 테스트: **~7.7~8Hz**까지 나옴 (당시 코드의
+  자연스러운 상한선 — read+encode+publish 합쳐서 프레임당 ~125ms)
+- 참고로 raw Z16 캡처 자체는 `v4l2-ctl`로 따로 재보면 640x480에서
+  **60fps**까지도 나온다 (드랍 1개 수준). 즉 8Hz는 센서/USB 한계가 아니라
+  순전히 소프트웨어 파이프라인(read→encode→publish를 한 스레드에서 순서대로
+  처리) 한계였음.
+
+### 추가 개선 시도: 파이프라인화 (부분 성공)
+읽기를 별도 스레드로 분리해서 항상 최신 프레임을 준비해두고, publish를
+`ThreadPoolExecutor`로 넘겨서 인코딩과 겹치게 만들면 이론상
+`1/max(encode, publish)` ≈ 15~18Hz까지 오를 것으로 기대했음.
+
+실제로는 **~9Hz**까지만 올랐다 (8Hz → 9Hz, read 대기시간 제거분 정도만
+이득). 원인은 **Python GIL** — `cv2.imencode`는 GIL을 풀어주지만
+`rclpy`의 `publish()`(직렬화 + rmw 전달)는 GIL을 오래 붙들고 있어서,
+스레드를 나눠도 인코딩과 발행이 실제로 동시에 실행되지 않고 GIL을
+번갈아 가지면서 순서대로 처리됨. 스레드로는 넘겼지만 진짜 병렬 실행이
+아니었던 것.
+
+기본값을 `depth_fps:=9.0`으로 설정하고 여기서 멈춤. 더 올리려면:
+- 해상도를 낮춰서 인코딩 자체를 가볍게 만들거나 (예: 424x240)
+- 멀티프로세싱(별도 OS 프로세스)으로 GIL을 아예 우회해야 함 — 다만
+  프레임 데이터를 프로세스 간에 넘기는 IPC 비용이 이득을 상쇄할 수 있어서
+  아직 시도 안 함.
+
+### 교훈
+- "CPU가 느려서 fps를 못 올린다"고 짐작하기 전에 `htop`/실측으로 확인할
+  것. 이번에도 실제 병목은 CPU 총량이 아니라 안 쓰는 메시지를 만드는
+  낭비 코드였음 (섹션 3의 "CPU 부족설" 오진단과 같은 패턴).
+- **발행하지 않는 메시지를 만드는 데도 비용이 든다** — 특히 큰 배열
+  필드(`uint8[]`, `Image.data` 등)를 rclpy 메시지에 대입하는 연산은
+  생각보다 느릴 수 있다. `if publisher is not None:` 가드가 있어도,
+  메시지 자체를 그 가드 **밖에서** 미리 만들어버리면 가드는 아무 의미가
+  없다.
+- 단계별 타이밍 로그를 직접 찍어보는 게 제일 빠른 진단 방법이었다
+  (섹션 2의 "라이브 캡처해서 오프라인 디코드"만큼 효과적).
+- **파이썬 스레드로 넘긴다고 다 병렬로 겹치는 건 아니다.** GIL을 실제로
+  풀어주는 호출(`cv2.imencode` 같은 C 확장)인지 확인 없이 "무거운 작업을
+  스레드로 빼면 겹치겠지"라고 가정하면 틀릴 수 있다 — `rclpy.publish()`가
+  그 경우였다. 진짜 병렬이 필요하면 멀티프로세싱을 고려해야 한다.
+
+## 5. 뎁스 이미지가 갑자기 등고선 무늬로 깨져 보이는 문제 (하드웨어 원인)
+
+### 증상
+코드를 전혀 안 건드렸는데도(섹션 4의 파이프라인 이전 검증된 버전 그대로)
+뎁스 이미지(`/main/uav/camera/depth/image_rect_raw`)가 갑자기 등고선/
+terracing 무늬로 나오기 시작함. 직전까지는 정상적인 이미지가 계속
+나오고 있었음.
+
+### 잘못 짚었던 가설
+- 코드는 안 바뀌었는데 결과가 바뀌어서 처음엔 소프트웨어 쪽(파이프라인
+  코드 잔재, 포트 꼬임)을 의심했음 — 파일 타임스탬프로 확인해보니 코드는
+  정말 안 바뀌어 있었음.
+- 등고선 무늬 자체가 RealSense 스테레오 뎁스의 정상적인 quantization/
+  terracing 현상(매끈하고 무늬 없는 표면에서 흔히 보임)과 겉보기엔
+  비슷해서, "그냥 정상적인 센서 특성"으로 결론지을 뻔했음.
+
+### 실제 원인
+`dmesg`를 확인해보니 **RealSense 카메라가 세션 도중 두 번 USB 연결이
+완전히 끊겼다가 재연결됨**:
+```
+[13881s] usb 2-1: USB disconnect, device number 2
+[13884s] usb 2-1: new SuperSpeed USB device ... RealSense Depth Camera 435if
+[14635s] usb 2-1: USB disconnect, device number 3
+[14642s] usb 2-1: new SuperSpeed USB device ... RealSense Depth Camera 435if
+```
+이 재연결 때문에 `/dev/video4`(컬러)가 `/dev/video5`로 번호가 바뀌기도
+했음. USB가 완전히 끊겼다 붙으면 카메라 내부 펌웨어 상태(IR 프로젝터
+on/off, 자동노출 보정 등)가 초기화되는데, V4L2/UVC 레벨에서만 접근하는
+우리 코드는 이런 RealSense 고유 상태를 제어/복원하지 못한다. 재연결 후
+IR 프로젝터가 꺼진 채로 초기화되면 무늬 없는 표면에서 스테레오 매칭이
+실패해서 등고선 무늬가 나타난 것으로 추정됨.
+
+재연결을 유발한 정확한 원인은 특정하지 못했지만, 디버깅 중 V4L2
+디바이스를 매우 짧은 간격으로 반복 강제종료(`kill -9`)/재시작한 것이
+유력한 원인으로 추정됨.
+
+### 해결
+카메라 USB 케이블을 물리적으로 뽑았다 다시 꽂아서 완전히 전원 재시작.
+소프트웨어 레벨에서는 이 상태를 복구할 방법이 없다 (v4l2-ctl/UVC
+인터페이스로는 RealSense 펌웨어 내부 상태에 접근 불가).
+
+### 교훈
+- 카메라 관련 이상 증상이 보이면 **코드 diff부터 보지 말고 `dmesg`로 USB
+  재연결 여부부터 확인**할 것. "코드를 안 바꿨는데 결과가 바뀌었다"는
+  소프트웨어 바깥(하드웨어/USB) 원인의 강한 신호다.
+- V4L2 디바이스를 짧은 시간에 너무 여러 번 강제 종료/재시작하면 USB
+  재연결을 유발할 수 있어 보인다 — 테스트할 때 장치를 완전히 정리하고
+  최소 1초 이상 텀을 두는 습관이 필요.
+- `/dev/videoN` 번호는 USB 재연결이 일어나면 바뀔 수 있다 — launch
+  인자로 디바이스 경로를 하드코딩해두면 재연결 후 실행이 조용히
+  실패하거나 엉뚱한 장치를 열 수 있으니, 실행 전 `v4l2-ctl --list-devices`로
+  항상 확인할 것.
+- RealSense를 순수 V4L2/UVC로 열면 IR 프로젝터/자동노출 등 고유 제어를
+  건드릴 수 없다 — 재연결 후 화질이 이상하면 소프트웨어보다 먼저 물리적
+  재연결(전원 재시작)을 시도해볼 것.
 
 ## 관련 파일
 
@@ -164,7 +283,10 @@ UAV 쪽 수정 후 `ros2 topic hz /main/uav/camera/depth/image_rect_raw`
 - `scripts/fastdds_shm_profile.xml` — SHM 전송 강제 활성화 (segment_size 8MB)
 - `src/uav_camera_receiver/uav_camera_receiver/image_decompressor_node.py` —
   퍼블리셔 QoS를 `qos_profile_sensor_data`(BEST_EFFORT)로 설정
-- `config/bashrc.ros2.snippet` — `ROS_DOMAIN_ID`, `ROS_DISCOVERY_SERVER`(자동 IP 감지),
-  `ROS_SUPER_CLIENT`, `FASTRTPS_DEFAULT_PROFILES_FILE` 설정 (실제 적용 대상은 `~/.bashrc`)
-- `config/fastdds-discovery-server.service` — Discovery Server 상시 구동 유닛
-  (실제 적용 대상은 `~/.config/systemd/user/`)
+- `~/.bashrc` — `ROS_DOMAIN_ID`, `ROS_DISCOVERY_SERVER`(자동 IP 감지),
+  `ROS_SUPER_CLIENT`, `FASTRTPS_DEFAULT_PROFILES_FILE` 설정
+- `~/.config/systemd/user/fastdds-discovery-server.service` — Discovery
+  Server 상시 구동
+- (`uav_ws` 저장소) `src/uav_camera_streamer/uav_camera_streamer/v4l2_depth_node.py` —
+  `publish_raw=false`일 때 안 쓰는 raw `Image` 메시지를 만들지 않도록 수정
+  (섹션 4 참고)
