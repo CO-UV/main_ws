@@ -1,4 +1,4 @@
-# main_ws
+# main_wsss
 
 메인 PC에서 UAV(라즈베리파이)가 발행하는 카메라/상태 토픽을 수신하기 위한
 ROS2 워크스페이스. Fast DDS Discovery Server + Super Client 구성을 사용한다
