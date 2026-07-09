@@ -94,11 +94,14 @@ class AStarPlanner(Node):
     def __init__(self) -> None:
         super().__init__('astar_planner')
 
-        self.map_yaml = str(
-            self.declare_parameter(
-                'map_yaml',
-                '/home/hong/HONG/maps/warehouse_occupancy.yaml',
-            ).value
+        default_map_yaml = os.path.expanduser('~/maps/warehouse_occupancy.yaml')
+        self.map_yaml = os.path.expanduser(
+            str(
+                self.declare_parameter(
+                    'map_yaml',
+                    default_map_yaml,
+                ).value
+            )
         )
         self.start_x = float(self.declare_parameter('start_x', 0.0).value)
         self.start_y = float(self.declare_parameter('start_y', -10.0).value)

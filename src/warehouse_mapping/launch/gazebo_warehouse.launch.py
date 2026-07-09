@@ -10,10 +10,14 @@ import os
 def generate_launch_description():
     package_share_dir = get_package_share_directory('warehouse_mapping')
     default_world = os.path.join(package_share_dir, 'worlds', 'ugv_warehouse.sdf')
-    px4_model_path = '/home/hong/PX4-Autopilot/Tools/simulation/gz/models'
+    home_dir = os.path.expanduser('~')
+    px4_model_path = os.environ.get(
+        'PX4_GZ_MODELS',
+        os.path.join(home_dir, 'PX4-Autopilot', 'Tools', 'simulation', 'gz', 'models'),
+    )
     gz_fuel_paths = [
-        '/home/hong/.gz/fuel/fuel.ignitionrobotics.org/openrobotics/models',
-        '/home/hong/.gz/fuel/fuel.ignitionrobotics.org/movai/models',
+        os.path.join(home_dir, '.gz', 'fuel', 'fuel.ignitionrobotics.org', 'openrobotics', 'models'),
+        os.path.join(home_dir, '.gz', 'fuel', 'fuel.ignitionrobotics.org', 'movai', 'models'),
     ]
     world = LaunchConfiguration('world')
     gz_args = LaunchConfiguration('gz_args')

@@ -69,7 +69,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'world_name',
-            default_value='warehouse_mapping_world',
+            default_value='warehouse',
             description='Gazebo world name where the drone will be spawned.',
         ),
         DeclareLaunchArgument(

@@ -67,12 +67,12 @@ Gazebo world
 
 ## Relevant Launch Files
 
-- [gazebo_warehouse.launch.py](/home/hong/HONG/src/warehouse_mapping/launch/gazebo_warehouse.launch.py:1)
-- [spawn_px4_depth_drone.launch.py](/home/hong/HONG/src/px4_depth_description/launch/spawn_px4_depth_drone.launch.py:1)
-- [camera_tf.launch.py](/home/hong/HONG/src/px4_depth_description/launch/camera_tf.launch.py:1)
-- [slam_mapping.launch.py](/home/hong/HONG/src/warehouse_mapping/launch/slam_mapping.launch.py:1)
-- [offboard_path.launch.py](/home/hong/HONG/src/warehouse_mapping/launch/offboard_path.launch.py:1)
-- [astar_planner.launch.py](/home/hong/HONG/src/ugv_path_planner/launch/astar_planner.launch.py:1)
+- [gazebo_warehouse.launch.py](src/warehouse_mapping/launch/gazebo_warehouse.launch.py)
+- [spawn_px4_depth_drone.launch.py](src/px4_depth_description/launch/spawn_px4_depth_drone.launch.py)
+- [camera_tf.launch.py](src/px4_depth_description/launch/camera_tf.launch.py)
+- [slam_mapping.launch.py](src/warehouse_mapping/launch/slam_mapping.launch.py)
+- [offboard_path.launch.py](src/warehouse_mapping/launch/offboard_path.launch.py)
+- [astar_planner.launch.py](src/ugv_path_planner/launch/astar_planner.launch.py)
 
 ## Prerequisites
 
@@ -85,8 +85,8 @@ Gazebo world
 Build once before running:
 
 ```bash
-cd /home/hong/HONG
-source /opt/ros/humble/setup.bash
+cd ~/main_ws
+source /opt/ros/humble/setup.bash   # ros_gz Harmonic binaries live here (ros-humble-ros-gzharmonic)
 colcon build --symlink-install
 source install/setup.bash
 ```
@@ -97,14 +97,14 @@ Open separate terminals and source ROS 2 plus the workspace in each one:
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd /home/hong/HONG
+cd ~/main_ws
 source install/setup.bash
 ```
 
 ### Terminal 1: Micro XRCE Agent
 
 ```bash
-/home/hong/micro_xrce_agent.sh
+MicroXRCEAgent udp4 -p 8888
 ```
 
 Expected role:
@@ -202,7 +202,7 @@ After the occupancy map is ready, run:
 
 ```bash
 ros2 launch ugv_path_planner astar_planner.launch.py \
-  map_yaml:=/home/hong/HONG/maps/warehouse_occupancy.yaml \
+  map_yaml:=$HOME/maps/warehouse_occupancy.yaml \
   start_x:=0.0 \
   start_y:=-10.0 \
   goal_x:=9.0 \
@@ -220,14 +220,14 @@ Expected role:
 
 Current saved occupancy map files:
 
-- [warehouse_occupancy.yaml](/home/hong/HONG/maps/warehouse_occupancy.yaml:1)
-- [warehouse_occupancy.pgm](/home/hong/HONG/maps/warehouse_occupancy.pgm:1)
+- `~/maps/warehouse_occupancy.yaml`
+- `~/maps/warehouse_occupancy.pgm`
 
 ### Planner Input
 
 The planner currently defaults to:
 
-- `/home/hong/HONG/maps/warehouse_occupancy.yaml`
+- `~/maps/warehouse_occupancy.yaml` (resolved from the current user's home)
 
 ## What Each Stage Achieves
 
