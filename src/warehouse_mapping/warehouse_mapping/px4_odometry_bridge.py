@@ -29,6 +29,12 @@ def ned_heading_to_enu_yaw(heading: float) -> float:
     return math.pi * 0.5 - heading
 
 
+def px4_timestamp_to_stamp(timestamp_us: int):
+    stamp_sec = int(timestamp_us // 1_000_000)
+    stamp_nanosec = int((timestamp_us % 1_000_000) * 1000)
+    return stamp_sec, stamp_nanosec
+
+
 class Px4OdometryBridge(Node):
     def __init__(self):
         super().__init__('px4_odometry_bridge')
@@ -40,6 +46,8 @@ class Px4OdometryBridge(Node):
             '/fmu/out/vehicle_local_position_v1',
         ).value
         self.odom_topic = self.declare_parameter('odom_topic', '/px4/odom').value
+        self.origin_x = float(self.declare_parameter('origin_x', 0.0).value)
+        self.origin_y = float(self.declare_parameter('origin_y', -5.5).value)
 
         self.odom_pub = self.create_publisher(Odometry, self.odom_topic, 10)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -50,7 +58,8 @@ class Px4OdometryBridge(Node):
             PX4_QOS,
         )
         self.get_logger().info(
-            f'PX4 local position bridge started: {self.local_position_topic} -> {self.odom_topic}'
+            f'PX4 local position bridge started: {self.local_position_topic} -> {self.odom_topic}, '
+            f'origin=({self.origin_x:.2f}, {self.origin_y:.2f})'
         )
 
     def local_position_cb(self, msg: VehicleLocalPosition) -> None:
@@ -62,8 +71,10 @@ class Px4OdometryBridge(Node):
             return
 
         stamp = self.get_clock().now().to_msg()
-        x = float(msg.y)
-        y = float(msg.x)
+        if stamp.sec == 0 and stamp.nanosec == 0 and getattr(msg, 'timestamp', 0) > 0:
+            stamp.sec, stamp.nanosec = px4_timestamp_to_stamp(int(msg.timestamp))
+        x = self.origin_x + float(msg.y)
+        y = self.origin_y + float(msg.x)
         z = float(-msg.z)
         heading = 0.0 if math.isnan(msg.heading) else float(msg.heading)
         qx, qy, qz, qw = yaw_to_quaternion(ned_heading_to_enu_yaw(heading))
