@@ -6,7 +6,7 @@
     </include>
 
     <include merge="true">
-      <uri>model://OakD-Lite</uri>
+      <uri>model://OakD-Lite-RGBD</uri>
       <pose>0 0 -0.12 0 1.57079632679 0</pose>
     </include>
 

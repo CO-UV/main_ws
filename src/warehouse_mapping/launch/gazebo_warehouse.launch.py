@@ -9,11 +9,14 @@ import os
 
 def generate_launch_description():
     package_share_dir = get_package_share_directory('warehouse_mapping')
+    px4_depth_share_dir = get_package_share_directory('px4_depth_description')
     default_world = os.path.join(package_share_dir, 'worlds', 'ugv_warehouse.sdf')
-    px4_model_path = '/home/hong/PX4-Autopilot/Tools/simulation/gz/models'
+    warehouse_model_path = os.path.join(package_share_dir, 'models')
+    local_model_path = os.path.join(px4_depth_share_dir, 'models')
+    px4_model_path = os.path.expanduser('~/PX4-Autopilot/Tools/simulation/gz/models')
     gz_fuel_paths = [
-        '/home/hong/.gz/fuel/fuel.ignitionrobotics.org/openrobotics/models',
-        '/home/hong/.gz/fuel/fuel.ignitionrobotics.org/movai/models',
+        os.path.expanduser('~/.gz/fuel/fuel.ignitionrobotics.org/openrobotics/models'),
+        os.path.expanduser('~/.gz/fuel/fuel.ignitionrobotics.org/movai/models'),
     ]
     world = LaunchConfiguration('world')
     gz_args = LaunchConfiguration('gz_args')
@@ -34,7 +37,9 @@ def generate_launch_description():
             shell=True,
             output='screen',
             additional_env={
-                'GZ_SIM_RESOURCE_PATH': ':'.join([px4_model_path] + gz_fuel_paths),
+                'GZ_SIM_RESOURCE_PATH': ':'.join(
+                    [warehouse_model_path, local_model_path, px4_model_path] + gz_fuel_paths
+                ),
             },
         ),
     ])

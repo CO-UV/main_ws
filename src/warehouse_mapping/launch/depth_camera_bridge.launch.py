@@ -11,6 +11,8 @@ def generate_launch_description():
             output='screen',
             arguments=[
                 '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+                '/rgb_camera@sensor_msgs/msg/Image[gz.msgs.Image',
+                '/rgb_camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
                 '/depth_camera@sensor_msgs/msg/Image[gz.msgs.Image',
                 '/depth_camera/points@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked',
                 '/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
